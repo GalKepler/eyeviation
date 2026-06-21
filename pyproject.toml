@@ -1,0 +1,13 @@
+[project]
+name = "shooter"
+version = "0.1.0"
+description = "Shooter performance feature engineering from VR shooting simulation logs"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "jupyter",
+    "nbconvert",
+    "nbformat",
+]
