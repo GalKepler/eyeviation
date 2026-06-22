@@ -83,13 +83,14 @@ def plot_hit_map(shots, user_id, ax=None):
     return ax
 
 
-def plot_feature_vs_score(shots, feature_col, ax=None, label=None):
-    """Scatter of a feature against the engine's own shot score, to sanity
-    check the feature actually relates to shot quality."""
+def plot_feature_vs_score(shots, feature_col, ax=None, label=None, outcome_col="score"):
+    """Scatter of a feature against a shot-quality outcome (the engine's own
+    discrete score by default, or shot_quality_pct), to sanity check the
+    feature actually relates to shot quality."""
     ax = ax or plt.gca()
-    ax.scatter(shots[feature_col], shots["score"], alpha=0.5)
+    ax.scatter(shots[feature_col], shots[outcome_col], alpha=0.5)
     ax.set_xlabel(label or feature_col)
-    ax.set_ylabel("shot score")
-    rho = shots[[feature_col, "score"]].corr(method="spearman").iloc[0, 1]
-    ax.set_title(f"{label or feature_col} vs score (Spearman ρ={rho:.2f})")
+    ax.set_ylabel(outcome_col)
+    rho = shots[[feature_col, outcome_col]].corr(method="spearman").iloc[0, 1]
+    ax.set_title(f"{label or feature_col} vs {outcome_col} (Spearman ρ={rho:.2f})")
     return ax

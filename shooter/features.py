@@ -62,10 +62,41 @@ def add_precision(shots):
     the line of fire, which the engine already snapped to the target plane,
     so it is not a measure of aim quality. Kept raw (not normalized by target
     distance) so it can be cross-checked against LINE_<row> in validation.
+
+    Tested normalizing by range (angle instead of meters) as an alternative:
+    it correlates *worse* with the engine's own score (Spearman 0.67 vs 0.83
+    for raw meters) because row-2 targets (10m) score worse on average than
+    row-1 (5m) despite being only 2x the distance -- the engine's scoring
+    rings are fixed physical radii, not angular cones. So raw meters is kept.
     """
     shots = shots.copy()
     shots["radial_error_m"] = np.hypot(shots["hit_x"] - shots["center_x"], shots["hit_y"] - shots["center_y"])
     shots["target_row"] = shots["object_id"].str.extract(r"LINE_(\d+)").astype(float)
+    return shots
+
+
+# Gaussian-decay scale for shot_quality_pct, least-squares fit on the sample
+# cohort so that 100*exp(-(radial_error_m/sigma)**2) tracks the engine's own
+# 0-5 score (rescaled to 0-100): fitted value was 0.116, mapping score 5 (best)
+# to ~86 and score 1 (worst valid hit) to ~19. Re-fit if a much larger/different
+# cohort suggests the scoring rings have a different physical size.
+SHOT_QUALITY_SIGMA_M = 0.116
+
+
+def add_shot_quality(shots):
+    """Consistency / dashboard: a single bounded 0-100 continuous accuracy
+    score, for audiences (and aggregate stats) that need a number instead of
+    raw meters.
+
+    Purely a monotonic transform of radial_error_m -- it doesn't change any
+    rank-based (Spearman) analysis -- but bounding it to (0, 100] keeps the
+    7 wrong-object misses (hit a wall/prop, no real target center, radial
+    error otherwise meaningless) from blowing up an average: those get a
+    hard 0 instead of being fed through the geometric formula.
+    """
+    shots = shots.copy()
+    quality = 100 * np.exp(-(shots["radial_error_m"] / SHOT_QUALITY_SIGMA_M) ** 2)
+    shots["shot_quality_pct"] = quality.where(shots["target_row"].notna(), 0.0)
     return shots
 
 
@@ -251,6 +282,7 @@ def add_quiet_eye(shots, frames, dominant_eye):
 def add_all_features(shots, frames, dominant_eye):
     shots = add_reaction_time(shots)
     shots = add_precision(shots)
+    shots = add_shot_quality(shots)
     shots = add_trigger_control(shots, frames)
     shots = add_gaze_and_pupil(shots, frames, dominant_eye)
     shots = add_quiet_eye(shots, frames, dominant_eye)
@@ -279,8 +311,9 @@ if __name__ == "__main__":
     frames, shots = parse_file(sample)
     dominant_eye = frames["session_metadata"]["dominant_eye"].iloc[0]
     shots = add_all_features(shots, frames, dominant_eye)
-    cols = ["reaction_time_s", "radial_error_m", "trigger_press_duration_s",
+    cols = ["reaction_time_s", "radial_error_m", "shot_quality_pct", "trigger_press_duration_s",
             "trigger_smoothness", "gaze_target_angle_deg", "pupil_diameter_mm",
             "quiet_eye_duration_s"]
     assert not shots[cols].isna().all().any(), "a feature is all-NaN -- window/columns likely broken"
+    assert shots["shot_quality_pct"].between(0, 100).all(), "shot_quality_pct out of bounds"
     print(shots[cols].describe())

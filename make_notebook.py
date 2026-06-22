@@ -35,7 +35,9 @@ could map to product feedback. See `CLAUDE.md` for the data dictionary and
 **Cohort:** 7 users, each running the same `TargetAcquisition` scenario
 (about 31 shots and 24 repetitions per session, roughly 6 minutes). An 8th
 file (user 243, `WarmUp` scenario, 350 shots) is a different drill and is
-left out of the cross-user comparisons - see Section 4.
+left out of the cross-user comparisons - see Section 5. It's used instead in
+Section 4 for a question the 7-user cohort can't answer: how do these
+features move across many repetitions for one person?
 """)
 
 # ---------------------------------------------------------------------------
@@ -135,6 +137,95 @@ pd.DataFrame(rows).round(2)
 
 # ---------------------------------------------------------------------------
 md("""
+### 0.1 Data deep-dive: composition, scale, and what made it tricky
+
+A closer look at all eight files, not just the one sampled above - what they
+actually contain, and the rough edges that showed up while turning them into
+a clean shot table.
+""")
+code("""
+rows = []
+for path in sorted(DATA_DIR.glob("*.event.json")):
+    f, s = parse_file(path)
+    rows.append({
+        "file": path.name, "size_mb": round(path.stat().st_size / 1e6, 1),
+        "scenario_id": s["scenario_id"].iloc[0] if len(s) else None,
+        "controller_frames": len(f.get("controller", [])),
+        "eye_frames": len(f.get("eye_data", [])),
+        "n_drills": s["drill_id"].nunique() if len(s) else 0,
+        "n_reps": s["rep_idx"].nunique() if len(s) else 0,
+        "n_shots": len(s),
+    })
+pd.DataFrame(rows).set_index("file")
+""")
+md("""
+Frame rate is the same across all eight files (the ~90 Hz established
+above) - size and event counts scale with session length and drill count,
+not a different recording rig. The cross-user cohort's seven files are all
+the same shape: 21-32 MB, 24 drills, 24 repetitions, 30-31 shots, one drill
+repeated with a different target each time.
+
+The eighth file (`WarmUp`, user 243, scenario `11601`) is the outlier on
+every axis: 76 MB, 72 drills, 72 repetitions, 350 shots, in a 15-minute
+session - about 3x the data of any cohort file. It isn't just a different
+scenario label; it packs **11 distinct drill types** (`TargetAcquisition`,
+`SplitShooting`, `NeutralizeThreat`, `TargetTransition`, `ThrottleControl`,
+`FriendVsFoe`, `TargetIdentification`, `SuppressiveFire`, `TakeCover`,
+`JohnWick`, plus warm-up variants), each repeated several times in a row.
+That structure is exactly why it's excluded from the cross-user comparison
+above (different task) and exactly what makes it useful for a different
+question in Section 4: how features move across many repetitions for one
+person, which the 24-repetition-once-each cohort files can't show.
+
+Per-frame types (`controller`, `headset`, `eye_data`) account for nearly all
+of the row volume - tens of thousands of rows per file. The dozen event
+types that carry the drill/repetition/shot structure are comparatively rare
+(single digits to low hundreds per file). That lopsided mix is the "dense
+time-series + sparse event log" shape the brief describes, and it's the
+reason `parse.py` streams every line into one pass rather than filtering by
+type at read time - there's no volume saved by special-casing the rare types.
+""")
+md("""
+**Challenges encountered**, beyond the event-ordering tie-break and
+eye-tracking calibration issue already covered above:
+
+- **`repetition_start.id` is always `0`.** Every repetition in every file
+  logs the same id, so repetitions can't be identified by id at all -
+  `parse.py` tracks them by arrival order (`rep_idx`) instead. The same is
+  true of `shot_start`/`shot_resolved` ids, which reset to `0` at the start
+  of each repetition and only disambiguate shots *within* the current
+  repetition, not across the whole file.
+- **Not every `shot_resolved.object_id` is a `LINE_.../.../.../...` target.**
+  A handful of shots in the cohort files resolve against static scene props
+  instead (`PrpSandBagsWallA1_LOD2.11`, `WallBack_Collider` - cover geometry,
+  not scoring targets). The path matcher in `parse.py` treats anything that
+  doesn't split into exactly four segments as a non-match rather than
+  raising, so these correctly fail to satisfy any shooting requirement
+  without crashing the pipeline - a reminder that `object_id` is "whatever
+  the raycast hit," not "always a scoreable target."
+- **The `WarmUp` file uses a second target-naming scheme.** Several of its
+  drills (its `FriendVsFoe` drill, in particular) resolve shots against
+  `B_LINE_<row>/<col>/TARGET/<zone>` paths instead of `LINE_.../BODY/...` -
+  a distinct target class, not a typo, since the matching `add` requirements
+  use the same `B_LINE_` prefix. The matcher never hardcodes `"LINE_"`, only
+  segment-by-segment equality, so it handles this correctly without any
+  special-casing: recomputed valid-hit still agrees with the engine's
+  `object_type` on 99.7% of this file's 350 shots (vs. 100% for the cohort).
+- **A duplicate repetition id inside one drill.** In the `WarmUp` file's
+  `SuppressiveFire` drill, repetition id `09.01` appears twice
+  (`...09.01`, `...09.02`, `...09.01` again, `...09.03`) instead of a clean
+  `.01`-`.04` run - read as a retried/restarted repetition rather than a
+  parser bug. `parse.py`'s arrival-order `rep_idx` isn't affected either way,
+  since it never relies on the id being unique, but it's a sign drill ids
+  aren't a fully reliable key on their own.
+- **`eye_data.convergence.distance` is flat at `100.0`** across every frame
+  sampled - flagged again here because it means we can't tell, from this
+  sample alone, whether it's unimplemented for this build or just degenerate
+  for these scenarios.
+""")
+
+# ---------------------------------------------------------------------------
+md("""
 ## Building the per-shot feature table
 
 The core join (`shooter/parse.py: build_shot_table`) replays every event in
@@ -161,7 +252,7 @@ profile mixes clear strengths and clear weaknesses, which makes for a more
 useful example than someone who's simply good or bad across the board).
 Scores are **0-100 percentiles against the other 6 users in this cohort**:
 100 is best in the group, 50 is the middle. With only 7 users this is a
-coarse ranking, not a calibrated population norm (see Section 4).
+coarse ranking, not a calibrated population norm (see Section 5).
 """)
 code("""
 DEMO_USER = 238
@@ -239,6 +330,24 @@ read, not just a single-shot number.
 
 For product, this maps straight onto the "shot grouping" visualizations
 shooters already expect from range training.
+
+**A continuous score for the dashboard.** `radial_error_m` is already a
+continuous accuracy score in meters, but raw meters is a poor number to show
+a shooter directly, and the 7 shots that hit scenario props instead of a
+target (no real center, `radial_error_m` undefined) would otherwise blow up
+any average. `shot_quality_pct` rescales it to a bounded 0-100 number via
+`100 * exp(-(radial_error_m / 0.116)^2)` (those 7 prop-hits get a hard 0),
+where 0.116m was fit so the curve tracks the engine's own 0-5 `score` field.
+We also tried normalizing by range first (angle instead of meters, so a 10cm
+miss at 5m and at 10m would count the same) - it correlates *worse* with the
+engine's score (Spearman 0.67 vs 0.83 for raw meters), because row-2 targets
+(10m) score worse on average than row-1 (5m) despite being only 2x the
+distance: the engine's scoring rings are a fixed physical size, not an
+angular cone, so raw meters is the right unit to score on, not angle.
+`shot_quality_pct` is a monotonic transform of `radial_error_m`, not a new
+independent feature, so it doesn't get its own row in the table above - it
+exists purely so non-technical readers and aggregate stats have a bounded,
+intuitive number instead of raw meters.
 
 #### 3. Trigger control
 From the `trigger_pull_value` stream in the second before the shot, we take
@@ -378,6 +487,26 @@ direction (more error or a wider gaze miss means a lower score; a longer
 Quiet Eye means a higher score), without us ever telling the pipeline what
 `score` was. That's independent validation that these features track real
 shot quality rather than an artifact of how they were built.
+
+One limitation of `score`: it only takes 5 distinct values across 216 shots,
+so it's a coarse yardstick. As a check, we re-ran the same correlations using
+`shot_quality_pct` (Section 2's continuous 0-100 rescaling of
+`radial_error_m`) as the outcome instead, for the three features that aren't
+themselves a transform of radial error.
+""")
+code("""
+for col in ["gaze_target_angle_deg", "quiet_eye_duration_s", "trigger_smoothness"]:
+    rho_score = shots[[col, "score"]].corr(method="spearman").iloc[0, 1]
+    rho_quality = shots[[col, "shot_quality_pct"]].corr(method="spearman").iloc[0, 1]
+    print(f"{col:25s} vs score: {rho_score:+.2f}   vs shot_quality_pct: {rho_quality:+.2f}")
+""")
+md("""
+The two outcomes agree closely (within 0.02 of each other on every feature):
+gaze angle and Quiet Eye both track shot quality at a moderate ρ≈0.5-0.6,
+trigger smoothness barely at all (ρ≈-0.05 to -0.07). So the picture from
+Section 3's "engine score" check isn't a quantization artifact of having
+only 5 score levels - a continuous, higher-resolution outcome tells the same
+story.
 """)
 code("""
 # Redundancy check: are the domains actually telling us different things, or
@@ -446,7 +575,122 @@ fig.tight_layout()
 
 # ---------------------------------------------------------------------------
 md("""
-## 4. Features Considered But Not Built
+## 4. Within-Session Trends: Repetition Effects in a Longer Session
+
+Every feature so far has been validated *across* shooters in the 7-user
+cohort, each of whom fired once through a 24-repetition session. That setup
+can't say anything about how a feature moves *within* one person's session,
+because there's only one data point per repetition per person.
+
+The excluded `WarmUp` file (user 243, scenario `11601`) is the one file in
+the sample built differently: 72 repetitions across 11 drill types in about
+15 minutes, instead of 24 repetitions of a single drill in about 6 minutes.
+It's still excluded from the cross-user cohort above (different task, so the
+percentile scores wouldn't mean the same thing), but the feature pipeline
+itself doesn't care what scenario it's running on - we can run it on this
+file directly and ask a question the cohort can't answer: does this
+shooter's performance change as repetitions add up?
+""")
+code("""
+from shooter.features import add_all_features
+
+warmup_path = DATA_DIR / "20260601113226_243_2531_11601.event.json"
+frames_wu, shots_wu = parse_file(warmup_path)
+dominant_eye_wu = frames_wu["session_metadata"]["dominant_eye"].iloc[0]
+shots_wu = add_all_features(shots_wu, frames_wu, dominant_eye_wu)
+shots_wu["drill_family"] = shots_wu["drill_id"].str.extract(r"WarmUp_([A-Za-z]+)_")
+
+shots_wu.groupby("drill_family").agg(n_reps=("rep_idx", "nunique"), n_shots=("rep_idx", "size"))
+""")
+md("""
+`TargetAcquisition` is the one drill family here that's literally the same
+task as the cross-user cohort's single drill - one bullet, one target,
+target row/column varied each time - just repeated 8 times in a row for one
+person instead of once each for 7 people. That makes it the cleanest
+same-task comparison available in this file.
+""")
+code("""
+ta = shots_wu[shots_wu["drill_family"] == "TargetAcquisition"].reset_index(drop=True)
+ta["rep_order"] = range(1, len(ta) + 1)
+
+fig, axes = plt.subplots(1, 4, figsize=(16, 3.5))
+for ax, col, label in zip(
+    axes,
+    ["reaction_time_s", "radial_error_m", "gaze_target_angle_deg", "quiet_eye_duration_s"],
+    ["reaction time (s)", "radial error (m)", "gaze-target angle (deg)", "Quiet Eye duration (s)"],
+):
+    ax.plot(ta["rep_order"], ta[col], marker="o")
+    ax.set_xlabel("repetition #")
+    ax.set_ylabel(label)
+fig.suptitle("User 243: TargetAcquisition feature trend across 8 repetitions (WarmUp session)")
+fig.tight_layout()
+""")
+md("""
+Across these 8 single-shot repetitions, none of the four features show a
+trend worth calling a learning curve or fatigue: rank correlation with
+repetition order is weak in every case (|ρ| ≤ 0.33). With only 8
+repetitions, that's the expected outcome - this is exactly the "not enough
+repeated structure" problem flagged in Section 5, just less severe here than
+for the one-rep-per-target cohort files. The honest read is "no detectable
+trend at this sample size," not "this shooter is flat across repetitions."
+
+The rest of the session has far more repetitions (72 total), just spread
+across 11 different drills rather than one. That's still useful for a
+broader question: does this shooter's performance drift over the course of
+a longer session, regardless of which drill they're on?
+""")
+code("""
+# Multi-bullet repetitions inflate reaction_time_s for later bullets (Section
+# 2's caveat: bullet 2's "reaction time" includes bullet 1's). Comparing raw
+# reaction_time_s across the whole session naively would mostly be measuring
+# "how many bullets were in this rep," not fatigue -- so we isolate the first
+# bullet of each repetition, which is on a level footing throughout.
+shots_wu_sorted = shots_wu.sort_values("shot_start_time").reset_index(drop=True)
+shots_wu_sorted["bullet_idx_in_rep"] = shots_wu_sorted.groupby("rep_idx").cumcount()
+first_bullets = shots_wu_sorted[shots_wu_sorted["bullet_idx_in_rep"] == 0].reset_index(drop=True)
+first_bullets["rep_order"] = range(1, len(first_bullets) + 1)
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+axes[0].plot(first_bullets["rep_order"], first_bullets["reaction_time_s"], marker=".", alpha=0.7)
+axes[0].set_xlabel("repetition # (whole session)"); axes[0].set_ylabel("reaction time (s), first bullet only")
+axes[1].plot(first_bullets["rep_order"], first_bullets["gaze_target_angle_deg"], marker=".", alpha=0.7, color="darkorange")
+axes[1].set_xlabel("repetition # (whole session)"); axes[1].set_ylabel("gaze-target angle (deg), first bullet only")
+fig.suptitle("User 243: first-bullet-per-repetition trend across the full 72-rep WarmUp session")
+fig.tight_layout()
+
+print(f"reaction time, first 10 vs last 10 repetitions: "
+      f"{first_bullets['reaction_time_s'][:10].mean():.2f}s -> {first_bullets['reaction_time_s'][-10:].mean():.2f}s")
+print(f"valid-hit rate, first half vs second half of session: "
+      f"{shots_wu_sorted['valid_hit_recomputed'][:175].mean():.0%} -> {shots_wu_sorted['valid_hit_recomputed'][175:].mean():.0%}")
+""")
+md("""
+Worth pausing on the confound this isolation avoids: averaging
+`reaction_time_s` over *all* shots in session order (not just the first
+bullet of each rep) makes it look like reaction time collapses from about
+1.5s to over 8s across the session - but that's an artifact of later drills
+in this `WarmUp` curriculum requiring far more bullets per repetition (up to
+15), not the shooter slowing down. Looking only at the first bullet of each
+repetition - the one apples-to-apples comparison available across the whole
+session - that effect disappears: reaction time is flat (about 1.5s in both
+the first and last 10 repetitions), gaze-target angle drifts slightly
+*better* as the session goes on (ρ ≈ -0.37 with repetition order), and the
+valid-hit rate is, if anything, slightly higher in the second half of the
+session (87% -> 91%) than the first.
+
+For this one shooter, across this one 15-minute, 72-repetition session,
+there's no sign of fatigue - focus and accuracy hold steady or tick up
+rather than decay. That's a real, useful finding on its own (this person can
+sustain performance over a longer session), but it rests on **n = 1
+shooter, 1 session** - it says nothing about whether that holds for anyone
+else, and it's exactly the gap Section 5's "learning-curve features" bullet
+points at: this file is the one exception in the sample with enough
+repeated structure to even ask the question, not proof the answer
+generalizes.
+""")
+
+# ---------------------------------------------------------------------------
+md("""
+## 5. Features Considered But Not Built
 
 Beyond the two supplementary features in Section 2 (computed, just not
 promoted), a couple of other ideas didn't make it into the pipeline at all:
@@ -469,10 +713,13 @@ promoted), a couple of other ideas didn't make it into the pipeline at all:
   percentile" into something that means the same thing for a new user next
   month would need norms built from dozens to hundreds of sessions per skill
   level.
-- *Learning-curve features* - does reaction time drop across repetitions
-  within a session, or across sessions for the same user? The sample is one
-  session per user (243 has two), which isn't enough repeated sessions to
-  fit a trend.
+- *Learning-curve features across sessions.* Section 4 shows that a
+  within-session version of this question is answerable when a session has
+  enough repetitions (the `WarmUp` file's 72), but that's one user, one
+  session. Telling apart "this person is learning" from "this person just
+  has a good day" needs multiple sessions per user over time, which this
+  sample doesn't have (243 has two sessions, but on different scenarios, so
+  even that pair isn't a clean before/after comparison).
 - *Recoil/follow-through and stance/posture features* would need sensor
   logs this schema doesn't have (full-body tracking, weapon recoil
   telemetry).
@@ -496,7 +743,7 @@ print(f"Quiet Eye duration range across cohort: {raw['quiet_eye'].min():.2f}s - 
       f"({raw['quiet_eye'].max() / max(raw['quiet_eye'].min(), 0.01):.0f}x spread)")
 """)
 md("""
-## 5. Product Manager Summary
+## 6. Product Manager Summary
 
 **Scope:** five features, one per domain (timing, motor control, trigger
 control, eye behavior, cognitive), plus a derived decision-quality metric.
@@ -511,6 +758,14 @@ shooter, and Quiet Eye duration spreads even wider (see the numbers above).
 Eye behavior is the single most differentiating skill in this cohort, and
 it's also the domain that's easiest to turn into a real-time in-VR coaching
 cue: "look at the target," "hold your sight picture before you fire."
+
+**Within a single longer session** (Section 4, one shooter, 72 repetitions),
+the same features show no sign of fatigue - reaction time, gaze-target
+angle, and valid-hit rate all hold steady or improve slightly from the first
+half of the session to the second. That's a useful, encouraging signal on
+its own, but it's one person's one session; turning it into a real
+"fatigue/learning" product feature needs the same metric tracked across
+many sessions per user, not just many repetitions in one.
 
 **Strong and weak skills:** decision quality (shooting the right target) and
 eye behavior (focus and Quiet Eye) separate the cohort the most; reaction
