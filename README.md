@@ -2,8 +2,7 @@
 
 Eyeviation home assignment: turn VR shooting-range event logs into 3-5
 interpretable shot-quality features and a two-audience report (shooter +
-PM). See `Data Scientist -  HA Eyeviation.pdf` for the brief and `CLAUDE.md`
-for the full data-format reference.
+PM).
 
 ## Layout
 
