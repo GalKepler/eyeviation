@@ -1,6 +1,6 @@
 """Exploratory per-user reporting metrics, on top of the headline features in
 features.py. Nothing here is promoted to MAIN_FEATURES or features.csv -- see
-analysis_explorations.ipynb for how these get used.
+analysis.ipynb for how these get used.
 
 Axis convention (validated against location_metadata.target_base: world x
 rises monotonically with column index; gun/headset position.y sits at

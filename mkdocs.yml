@@ -1,6 +1,6 @@
 site_name: Shooter Performance Feature Engineering
 site_description: VR shooting-range event logs -> interpretable shot-quality features -> shooter & PM report.
-repo_url: https://github.com
+repo_url: https://github.com/GalKepler/eyeviation
 docs_dir: docs
 
 theme:

@@ -17,6 +17,10 @@ shooter/
                       (eye/cognitive); plus decision-quality (cognitive,
                       derived).
   dashboard.py        Scoring + plotting helpers used by the notebook.
+  reporting.py        Exploratory per-user metrics (drift/bias, split times,
+                      speed/accuracy tradeoff, session trend, postural sway)
+                      on top of the headline features; validated but not
+                      promoted into features.csv.
   build_features.py   Runs the pipeline over the data folder -> features.csv.
 analysis.ipynb         The report: EDA, feature explanations, validation,
                        shooter dashboard, PM summary. The actual deliverable.
