@@ -32,7 +32,11 @@ features.csv            Cached per-shot feature table (output of the pipeline).
 uv sync
 uv run python -m shooter.build_features        # writes features.csv
 uv run jupyter nbconvert --to notebook --execute --inplace analysis.ipynb
+uv run mkdocs serve                            # browsable docs site (http://127.0.0.1:8000)
 ```
+
+`mkdocs.yml` + `docs/` build a small site (notebook + code reference +
+data/pipeline overview) on top of the same sources — see `docs/index.md`.
 
 ### Producing the PDF report
 
