@@ -202,5 +202,5 @@ uv.lock
 # via the brief's own Drive link, and too large for a clean repo.
 20260601072221_238_2566_11639.event/
 Data Scientist -  HA Eyeviation.pdf
-CLAUDE.md
-.claude/
+# CLAUDE.md
+# .claude/
